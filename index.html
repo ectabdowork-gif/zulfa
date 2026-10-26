@@ -1,0 +1,417 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>زلفى — تصفح الكتيب</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{ --ink:#f6f2ec; --muted:rgba(246,242,236,.7); --glass:rgba(24,24,22,.42); --green:#1f6b43; }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%; background:#8a8a88; overflow:hidden}
+  body{font-family:"IBM Plex Sans Arabic",system-ui,sans-serif; color:var(--ink); user-select:none; -webkit-user-select:none}
+  canvas{display:block; touch-action:none}
+  body::after{content:""; position:fixed; inset:0; pointer-events:none; z-index:2;
+    background:radial-gradient(130% 100% at 50% 45%, transparent 55%, rgba(30,28,25,.28) 100%)}
+  canvas.grab{cursor:grab} canvas.grabbing{cursor:grabbing}
+
+  .loader{position:fixed; inset:0; display:grid; place-items:center; background:#8a8a88; color:#f4f3f1; z-index:20; transition:opacity 1.2s ease}
+  .loader div{display:flex; flex-direction:column; align-items:center; gap:14px; font-size:14px; letter-spacing:.02em}
+  .loader i{width:140px; height:2px; background:rgba(0,0,0,.08); position:relative; overflow:hidden; border-radius:2px}
+  .loader i::after{content:""; position:absolute; inset:0; width:40%; background:var(--green); animation:ld 1.1s ease-in-out infinite}
+  @keyframes ld{from{transform:translateX(-120%)}to{transform:translateX(320%)}}
+
+  .bar{position:fixed; left:50%; bottom:18px; transform:translate(-50%,20px); display:flex; align-items:center; gap:14px;
+       padding:8px 12px; border-radius:999px; background:var(--glass); backdrop-filter:blur(14px) saturate(1.2); -webkit-backdrop-filter:blur(14px);
+       box-shadow:0 8px 30px rgba(0,0,0,.18); opacity:0; pointer-events:none; transition:opacity .9s ease, transform .9s ease; font-size:14px; z-index:5}
+  .bar.on{opacity:1; transform:translate(-50%,0); pointer-events:auto}
+  .btn{width:38px; height:38px; border-radius:50%; border:0; background:rgba(255,255,255,.08); color:var(--ink); display:grid; place-items:center; cursor:pointer; transition:background .25s, opacity .25s}
+  .btn:hover{background:rgba(255,255,255,.2)}
+  .btn:disabled{opacity:.3; cursor:default; background:transparent}
+  .btn svg{width:17px; height:17px}
+  .count{min-width:118px; text-align:center; font-variant-numeric:tabular-nums}
+  input[type=range]{width:min(260px,32vw); accent-color:#fff; direction:rtl}
+  .skip{position:fixed; bottom:24px; left:24px; z-index:6; border:0; cursor:pointer; font:inherit; font-size:13px; color:#fff;
+        background:rgba(0,0,0,.28); backdrop-filter:blur(10px); padding:8px 16px; border-radius:999px; transition:opacity .6s}
+  .hint{position:fixed; top:18px; left:50%; transform:translateX(-50%); font-size:13px; color:#fff; background:rgba(0,0,0,.3);
+        backdrop-filter:blur(10px); padding:6px 14px; border-radius:999px; opacity:0; transition:opacity 1s; pointer-events:none; z-index:5}
+  @media (max-width:620px){ input[type=range]{display:none} .bar{gap:8px} .count{min-width:96px; font-size:13px} }
+</style>
+</head>
+<body>
+<div class="loader" id="loader"><div><span>زُلفى</span><i></i></div></div>
+<div class="hint" id="hint">اسحب طرف الصفحة أو اضغط عليها للتقليب</div>
+<div class="bar" id="bar">
+  <button class="btn" id="fs" title="ملء الشاشة" aria-label="ملء الشاشة"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+  <button class="btn" id="prev" title="السابق" aria-label="السابق"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg></button>
+  <span class="count" id="count">الغلاف</span>
+  <input type="range" id="seek" min="0" value="0" aria-label="الانتقال إلى صفحة">
+  <button class="btn" id="next" title="التالي" aria-label="التالي"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M15 6l-6 6 6 6"/></svg></button>
+</div>
+
+<script src="pages-a.js" defer></script>
+<script src="pages-b.js" defer></script>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js"}}</script>
+<script type="module">
+import * as THREE from 'three';
+
+/* ================= constants ================= */
+const PAGES = PAGE_DATA.length, N = PAGES / 2;   // leaf k: front = page 2k+1, back = page 2k+2
+const T = 0.0011;            // paper thickness (1 unit = one page width)
+const SPINE_Y = 0.003;
+const GUT = 0.07;            // how far from the spine the pages rise out of the gutter
+const SU = 56, SV = 28;      // leaf mesh resolution
+
+/* ================= renderer / scene ================= */
+const renderer = new THREE.WebGLRenderer({antialias: true});
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.NoToneMapping;          // keep the printed colours untouched
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.prepend(renderer.domElement);
+const MAX_ANISO = renderer.capabilities.getMaxAnisotropy();
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x8a8a88);
+const camera = new THREE.PerspectiveCamera(32, innerWidth / innerHeight, 0.02, 80);
+
+function canvasTex(w, h, draw, srgb = true){
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  draw(c.getContext('2d'), w, h);
+  const t = new THREE.CanvasTexture(c);
+  if (srgb) t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = MAX_ANISO;
+  return t;
+}
+const rnd = (a, b) => a + Math.random() * (b - a);
+
+// matte grey table top with a fine grain
+const tableTex = canvasTex(1024, 1024, (g, w, h) => {
+  g.fillStyle = '#8f8f8d'; g.fillRect(0, 0, w, h);
+  const d = g.getImageData(0, 0, w, h);
+  for (let i = 0; i < d.data.length; i += 4) { const n = rnd(-6, 6); d.data[i] += n; d.data[i+1] += n; d.data[i+2] += n; }
+  g.putImageData(d, 0, 0);
+});
+tableTex.wrapS = tableTex.wrapT = THREE.RepeatWrapping; tableTex.repeat.set(5, 3);
+
+/* ================= lights =================
+   Ambient + sun are balanced so a flat page facing up renders at exactly its printed colour
+   ((AMB + SUN·cos) / PI = 1). Anything that bends away from the sun or sits in a shadow darkens. */
+const SUN_DIR = new THREE.Vector3(-.3, 1, -.42).normalize();
+const AMB = .6 * Math.PI;
+scene.add(new THREE.AmbientLight(0xffffff, AMB));
+const sun = new THREE.DirectionalLight(0xffffff, (Math.PI - AMB) / SUN_DIR.y);
+sun.position.copy(SUN_DIR).multiplyScalar(12);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, {left: -3, right: 3, top: 3, bottom: -3, near: 4, far: 24});
+sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.01; sun.shadow.radius = 5;
+scene.add(sun, sun.target);
+
+/* ================= table + props ================= */
+function box(w, h, d, mat, x, y, z, cast = false, recv = true){
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+  m.position.set(x, y, z); m.castShadow = cast; m.receiveShadow = recv; scene.add(m); return m;
+}
+box(14, .3, 9, new THREE.MeshLambertMaterial({map: tableTex}), 0, -.15, 0);
+
+// soft contact shadow under each half of the book (ambient occlusion on the table)
+const contactTex = canvasTex(256, 256, (g, w, h) => {
+  g.filter = 'blur(14px)'; g.fillStyle = 'rgba(0,0,0,.55)'; g.fillRect(30, 30, w - 60, h - 60);
+});
+const contact = [-1, 1].map(s => {
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(1.22, 1.22), new THREE.MeshBasicMaterial({map: contactTex, transparent: true, depthWrite: false}));
+  m.rotation.x = -Math.PI / 2; m.position.set(s * .5, .0008, .01); scene.add(m); return m;
+});
+function updateContact(){ contact[0].visible = flipped < N; contact[1].visible = flipped > 0; }
+
+const mugPts = [[0,0],[.13,0],[.145,.01],[.15,.04],[.15,.3],[.14,.3],[.135,.04],[0,.03]].map(([x,y]) => new THREE.Vector2(x, y));
+const mug = new THREE.Mesh(new THREE.LatheGeometry(mugPts, 64), new THREE.MeshLambertMaterial({color: 0xf1efeb}));
+mug.position.set(1.75, 0, -.62); mug.castShadow = mug.receiveShadow = true; scene.add(mug);
+const tea = new THREE.Mesh(new THREE.CircleGeometry(.136, 48), new THREE.MeshLambertMaterial({color: 0x4a3426}));
+tea.rotation.x = -Math.PI / 2; tea.position.set(1.75, .24, -.62); scene.add(tea);
+const handle = new THREE.Mesh(new THREE.TorusGeometry(.075, .017, 16, 40, Math.PI * 1.1), mug.material);
+handle.position.set(1.75 + .15, .15, -.62); handle.rotation.z = -Math.PI * .55; handle.castShadow = true; scene.add(handle);
+const pencil = new THREE.Group();
+const pb = new THREE.Mesh(new THREE.CylinderGeometry(.012, .012, .52, 6), new THREE.MeshLambertMaterial({color: 0x1f6b43}));
+const pt = new THREE.Mesh(new THREE.ConeGeometry(.012, .05, 6), new THREE.MeshLambertMaterial({color: 0xd9c7ad}));
+pt.position.y = .285; pencil.add(pb, pt); pencil.traverse(o => o.castShadow = true);
+pencil.rotation.order = 'YXZ'; pencil.rotation.set(Math.PI / 2, -.5, 0);
+pencil.position.set(1.45, .012, .42); scene.add(pencil);
+
+/* ================= book ================= */
+const placeholder = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1); placeholder.needsUpdate = true;
+const edgeMat = new THREE.MeshLambertMaterial({color: 0xeeebe5});
+const blockL = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), edgeMat);
+const blockR = blockL.clone();
+for (const b of [blockL, blockR]) { b.castShadow = true; b.receiveShadow = true; scene.add(b); }
+
+function leafGeometry(){
+  const nu = SU + 1, nv = SV + 1, uv = new Float32Array(nu * nv * 2), idx = [];
+  for (let j = 0; j < nv; j++) for (let i = 0; i < nu; i++) {
+    const n = j * nu + i; uv[n * 2] = 1 - i / SU; uv[n * 2 + 1] = 1 - j / SV;
+  }
+  for (let j = 0; j < SV; j++) for (let i = 0; i < SU; i++) {
+    const a = j * nu + i, b = a + 1, c = a + nu, d = c + 1;
+    idx.push(a, b, c, b, d, c);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(nu * nv * 3), 3));
+  g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  g.setIndex(idx);
+  return g;
+}
+
+/* Paper: Lambert (no sheen) plus a shadow that deepens into the gutter where the pages meet the spine. */
+function paperMaterial(side, gutter){
+  const m = new THREE.MeshLambertMaterial({map: placeholder, side});
+  const uGutter = {value: gutter};
+  m.onBeforeCompile = sh => {
+    sh.uniforms.uGutter = uGutter;
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying float vSpine;')
+      .replace('#include <uv_vertex>', '#include <uv_vertex>\nvSpine = 1.0 - uv.x;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying float vSpine;\nuniform float uGutter;')
+      .replace('#include <map_fragment>', `#include <map_fragment>
+        float gut = 1.0 - uGutter * (0.38 * exp(-vSpine / 0.018) + 0.17 * exp(-vSpine / 0.075) + 0.05 * exp(-vSpine / 0.3));
+        float edge = 1.0 - uGutter * 0.06 * exp(-(1.0 - vSpine) / 0.008);
+        diffuseColor.rgb *= gut * edge;`);
+  };
+  return m;
+}
+
+const leaves = [];
+for (let k = 0; k < N; k++) {
+  const geo = leafGeometry();
+  const fm = paperMaterial(THREE.FrontSide, k === 0 ? .2 : 1);
+  const bm = paperMaterial(THREE.BackSide, k === N - 1 ? .2 : 1);
+  const front = new THREE.Mesh(geo, fm), back = new THREE.Mesh(geo, bm);
+  front.receiveShadow = back.receiveShadow = true;
+  scene.add(front, back);
+  leaves.push({k, geo, front, back, fm, bm, theta: 0, stiff: k === 0 || k === N - 1, tex: null});
+}
+
+/* Paper shape. theta = angle at the spine (0 = lying on the left, PI = on the right).
+   The sheet bends along its width (free edge lags behind the spine), twists so one corner
+   leads, and near the spine it rises out of the gutter to sit on its own layer of the stack. */
+function shapeLeaf(L, theta, dir = 1, lead = 1){
+  L.theta = theta;
+  const p = L.geo.attributes.position.array;
+  const s = Math.sin(theta);
+  const A = L.stiff ? .22 : 1.05, B = L.stiff ? .1 : .5;
+  const hL = (N - L.k) * T, hR = (L.k + 1) * T;
+  const h = hL + (hR - hL) * (theta / Math.PI), cg = Math.abs(Math.cos(theta));
+  const du = 1 / SU, nu = SU + 1;
+  for (let j = 0; j <= SV; j++) {
+    const v = -.5 + j / SV;
+    let X = 0, Y = SPINE_Y;
+    for (let i = 0; i <= SU; i++) {
+      const u = i * du;
+      if (i > 0) {
+        const um = u - du / 2;
+        let phi = theta - dir * A * s * Math.pow(um, 1.6) + dir * B * s * um * v * 2 * lead;
+        phi = Math.min(Math.PI, Math.max(0, phi));
+        X -= Math.cos(phi) * du; Y += Math.sin(phi) * du;
+      }
+      const o = (j * nu + i) * 3;
+      p[o] = X; p[o + 1] = Y + h * (1 - Math.exp(-u / GUT)) * cg; p[o + 2] = v;
+    }
+  }
+  L.geo.attributes.position.needsUpdate = true;
+  L.geo.computeVertexNormals();
+  L.geo.computeBoundingSphere();
+}
+
+function pageTexture(n, mirror){
+  const img = new Image();
+  const t = new THREE.Texture(img);
+  t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = MAX_ANISO;
+  if (mirror) { t.repeat.x = -1; t.offset.x = 1; }
+  img.onload = () => { t.needsUpdate = true; };
+  img.src = PAGE_DATA[n - 1];
+  return t;
+}
+function loadLeaf(k){
+  const L = leaves[k]; if (!L || L.tex) return;
+  L.tex = [pageTexture(2 * k + 1, false), pageTexture(2 * k + 2, true)];
+  L.fm.map = L.tex[0]; L.bm.map = L.tex[1];
+}
+function unloadFar(){
+  for (const L of leaves) if (L.tex && Math.abs(L.k - flipped) > 5) {
+    L.tex.forEach(t => t.dispose()); L.tex = null; L.fm.map = L.bm.map = placeholder;
+  }
+}
+function prepare(){ for (let k = flipped - 3; k <= flipped + 3; k++) loadLeaf(k); unloadFar(); }
+
+let flipped = 0;
+function updateBlocks(){
+  const nl = N - flipped, nr = flipped;
+  const set = (b, n, x) => {
+    b.visible = n > 1;
+    const hgt = Math.max(.0001, (n - 2) * T);
+    b.scale.set(.63, hgt, .994); b.position.set(x, hgt / 2, 0);
+  };
+  set(blockL, nl, -.67); set(blockR, nr, .67);
+}
+leaves.forEach(L => shapeLeaf(L, 0));
+updateBlocks(); updateContact(); prepare();
+
+/* ================= flipping ================= */
+const ease = t => t < .5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+let anim = null, queued = 0;
+
+function startAnim(L, to, dir, lead, dur){
+  const from = L.theta;
+  dur = dur ?? 1150 * Math.max(.4, Math.abs(to - from) / Math.PI);
+  anim = {L, from, to, dir, lead, t0: performance.now(), dur};
+  L.front.castShadow = true;
+}
+function stepAnim(now){
+  if (!anim) return;
+  const a = anim, t = Math.min(1, (now - a.t0) / a.dur);
+  shapeLeaf(a.L, a.from + (a.to - a.from) * ease(t), a.dir, a.lead);
+  if (t >= 1) {
+    a.L.front.castShadow = false; anim = null; updateBlocks(); updateContact(); unloadFar();
+    if (queued) { const q = queued; queued = 0; turn(q); }
+  }
+}
+function turn(dir){
+  if (!ready) return;
+  if (anim || drag?.moved) { queued = dir; return; }
+  if (dir > 0 && flipped >= N) return;
+  if (dir < 0 && flipped <= 0) return;
+  const L = leaves[dir > 0 ? flipped : flipped - 1];
+  flipped += dir; prepare(); ui(); hideHint(); updateContact();
+  startAnim(L, dir > 0 ? Math.PI : 0, dir, 1);
+}
+function goTo(target){
+  target = Math.max(0, Math.min(N, target));
+  if (anim || target === flipped) return;
+  const dir = target > flipped ? 1 : -1;
+  while (Math.abs(target - flipped) > 1) {
+    shapeLeaf(leaves[dir > 0 ? flipped : flipped - 1], dir > 0 ? Math.PI : 0);
+    flipped += dir;
+  }
+  updateBlocks(); turn(dir);
+}
+
+/* ================= camera ================= */
+const camPos = new THREE.Vector3(), camLook = new THREE.Vector3();
+function readingView(){
+  const a = innerWidth / innerHeight, tn = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+  const usable = (innerHeight - 96) / innerHeight;
+  const H = Math.max(2.28 / (2 * tn * a), 1.16 / (2 * tn * usable));
+  const tx = flipped === 0 ? -.5 : flipped === N ? .5 : 0;
+  const tz = (44 / innerHeight) * 2 * H * tn;          // lift the book above the control bar
+  return {pos: new THREE.Vector3(tx, H, tz + H * .13), look: new THREE.Vector3(tx, 0, tz)};
+}
+let ready = false;
+function updateCamera(now, dt){
+  const v = readingView(), k = 1 - Math.exp(-dt * 2.4);
+  camera.position.lerp(v.pos, k); camLook.lerp(v.look, k); camera.lookAt(camLook);
+}
+
+/* ================= input ================= */
+const ray = new THREE.Raycaster(), ndc = new THREE.Vector2(), table0 = new THREE.Plane(new THREE.Vector3(0, 1, 0), -.01);
+function hit(e){
+  ndc.set(e.clientX / innerWidth * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
+  ray.setFromCamera(ndc, camera);
+  return ray.ray.intersectPlane(table0, new THREE.Vector3());
+}
+let drag = null;
+const cv = renderer.domElement;
+cv.addEventListener('pointerdown', e => {
+  if (!ready) return;
+  if (anim) return;
+  const p = hit(e); if (!p || Math.abs(p.z) > .55 || Math.abs(p.x) > 1.05) return;
+  const left = p.x < 0;
+  if (left && flipped >= N) return;
+  if (!left && flipped <= 0) return;
+  drag = {x0: e.clientX, y0: e.clientY, left, moved: false, L: leaves[left ? flipped : flipped - 1],
+          lead: Math.max(-1, Math.min(1, p.z * 2)) || .001, v: 0, last: p.x, t: performance.now()};
+  cv.setPointerCapture(e.pointerId);
+});
+cv.addEventListener('pointermove', e => {
+  if (!drag) return;
+  if (!drag.moved && Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0) < 6) return;
+  const p = hit(e); if (!p) return;
+  if (!drag.moved) { drag.moved = true; cv.classList.add('grabbing'); loadLeaf(drag.L.k + 1); loadLeaf(drag.L.k - 1); drag.L.front.castShadow = true; hideHint(); }
+  const now = performance.now();
+  drag.v = (p.x - drag.last) / Math.max(1, now - drag.t) * 1000; drag.last = p.x; drag.t = now;
+  const c = Math.max(-1, Math.min(1, -p.x));
+  const theta = Math.acos(c);
+  shapeLeaf(drag.L, theta, drag.left ? 1 : -1, drag.lead * (drag.left ? 1 : -1) * 1.4);
+});
+function endDrag(){
+  if (!drag) return;
+  const d = drag; drag = null; cv.classList.remove('grabbing');
+  if (!d.moved) { turn(d.left ? 1 : -1); return; }
+  const forward = d.v > 1.2 ? true : d.v < -1.2 ? false : d.L.theta > Math.PI / 2;
+  if (d.left && forward) flipped++;
+  if (!d.left && !forward) flipped--;
+  prepare(); ui(); updateContact();
+  startAnim(d.L, forward ? Math.PI : 0, forward ? 1 : -1, d.lead * (forward ? 1 : -1) * 1.4);
+}
+cv.addEventListener('pointerup', endDrag);
+cv.addEventListener('pointercancel', endDrag);
+
+document.getElementById('next').onclick = () => turn(1);
+document.getElementById('prev').onclick = () => turn(-1);
+const seek = document.getElementById('seek'); seek.max = N;
+seek.addEventListener('change', () => goTo(+seek.value));
+addEventListener('keydown', e => {
+  if (!ready) return;
+  if (e.key === 'ArrowLeft' || e.key === 'PageDown' || e.key === ' ') { e.preventDefault(); turn(1); }
+  if (e.key === 'ArrowRight' || e.key === 'PageUp') { e.preventDefault(); turn(-1); }
+  if (e.key === 'Home') goTo(0);
+  if (e.key === 'End') goTo(N);
+});
+document.getElementById('fs').onclick = () => document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen?.();
+let hintHidden = false;
+function hideHint(){ if (!hintHidden) { hintHidden = true; document.getElementById('hint').style.opacity = 0; } }
+
+function ui(){
+  document.getElementById('prev').disabled = flipped === 0;
+  document.getElementById('next').disabled = flipped === N;
+  seek.value = flipped;
+  document.getElementById('count').textContent =
+    flipped === 0 ? 'الغلاف' : flipped === N ? 'الغلاف الخلفي' : `${2 * flipped} و ${2 * flipped + 1} من ${PAGES}`;
+}
+ui();
+
+addEventListener('resize', () => {
+  renderer.setSize(innerWidth, innerHeight);
+  camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+});
+
+/* ================= loop ================= */
+let last = performance.now();
+function frame(now){
+  const dt = Math.min(.05, (now - last) / 1000); last = now;
+  stepAnim(now);
+  updateCamera(now, dt);
+  renderer.render(scene, camera);
+  requestAnimationFrame(frame);
+}
+
+// start low and oblique, then glide up into the reading view
+{ const v = readingView(); camLook.copy(v.look);
+  camera.position.set(v.pos.x + .4, v.pos.y * .55, v.look.z + v.pos.y * 1.05); camera.lookAt(camLook); }
+renderer.compile(scene, camera);
+Promise.all(leaves.slice(0, 3).flatMap(L => L.tex.map(t => t.image.decode().catch(() => {})))).then(() => {
+  requestAnimationFrame(frame);
+  const l = document.getElementById('loader');
+  setTimeout(() => {
+    l.style.opacity = 0; setTimeout(() => l.remove(), 1300);
+    ready = true; renderer.domElement.classList.add('grab');
+    document.getElementById('bar').classList.add('on');
+    const h = document.getElementById('hint'); h.style.opacity = 1; setTimeout(hideHint, 5000);
+  }, 250);
+});
+</script>
+</body>
+</html>
