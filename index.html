@@ -24,8 +24,17 @@
 
   .bar{position:fixed; left:50%; bottom:18px; transform:translate(-50%,20px); display:flex; align-items:center; gap:14px;
        padding:8px 12px; border-radius:999px; background:var(--glass); backdrop-filter:blur(14px) saturate(1.2); -webkit-backdrop-filter:blur(14px);
-       box-shadow:0 8px 30px rgba(0,0,0,.18); opacity:0; pointer-events:none; transition:opacity .9s ease, transform .9s ease; font-size:14px; z-index:5}
+       box-shadow:0 8px 30px rgba(0,0,0,.18); opacity:0; pointer-events:none; transition:opacity .5s ease, transform .65s cubic-bezier(.65,0,.35,1); font-size:14px; z-index:5}
   .bar.on{opacity:1; transform:translate(-50%,0); pointer-events:auto}
+  /* collapsed: the bar shrinks into the corner icon (its transform is set from JS) */
+  .bar.on.collapsed{opacity:0; pointer-events:none; transition:transform .65s cubic-bezier(.65,0,.35,1), opacity .4s ease .2s}
+  .dock{position:fixed; right:18px; bottom:18px; width:48px; height:48px; border-radius:50%; border:0; color:var(--ink); cursor:pointer;
+        display:grid; place-items:center; background:var(--glass); backdrop-filter:blur(14px) saturate(1.2); -webkit-backdrop-filter:blur(14px);
+        box-shadow:0 8px 30px rgba(0,0,0,.22); opacity:0; transform:scale(.4); pointer-events:none; z-index:5;
+        transition:opacity .25s ease, transform .3s ease}
+  .dock.on{opacity:1; transform:scale(1); pointer-events:auto; transition:opacity .35s ease .45s, transform .5s cubic-bezier(.3,1.5,.5,1) .4s}
+  .dock:hover{background:rgba(40,38,34,.6)}
+  .dock svg{width:20px; height:20px}
   .btn{width:38px; height:38px; border-radius:50%; border:0; background:rgba(255,255,255,.08); color:var(--ink); display:grid; place-items:center; cursor:pointer; transition:background .25s, opacity .25s}
   .btn:hover{background:rgba(255,255,255,.2)}
   .btn:disabled{opacity:.3; cursor:default; background:transparent}
@@ -49,6 +58,7 @@
     input[type=range]{width:min(200px,26vw)}
     .hint{top:8px; font-size:12px}
     .zoom{right:8px; padding:4px; gap:4px}
+    .dock{right:8px; bottom:8px; width:38px; height:38px} .dock svg{width:16px; height:16px}
   }
 </style>
 </head>
@@ -60,6 +70,7 @@
   <button class="btn" id="zfit" title="ملء الإطار" aria-label="ملء الإطار"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 12h16M8 8l-4 4 4 4M16 8l4 4-4 4"/></svg></button>
   <button class="btn" id="zout" title="تصغير" aria-label="تصغير"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14"/></svg></button>
 </div>
+<button class="dock" id="dock" title="أدوات التصفح" aria-label="أدوات التصفح"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg></button>
 <div class="bar" id="bar">
   <button class="btn" id="fs" title="ملء الشاشة" aria-label="ملء الشاشة"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
   <button class="btn" id="prev" title="السابق" aria-label="السابق"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg></button>
@@ -426,6 +437,27 @@ addEventListener('keydown', e => {
   if (e.key === '0') setZoom(1);
 });
 document.getElementById('fs').onclick = () => document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen?.();
+/* control bar: shown once, then it tucks itself into the corner icon; the icon brings it back */
+const bar = document.getElementById('bar'), dock = document.getElementById('dock');
+let barTimer = null;
+function collapseBar(){
+  if (bar.classList.contains('collapsed')) return;
+  const b = bar.getBoundingClientRect(), d = dock.getBoundingClientRect();
+  const dx = (d.left + d.width / 2) - (b.left + b.width / 2), dy = (d.top + d.height / 2) - (b.top + b.height / 2);
+  bar.style.transform = `translate(calc(-50% + ${dx}px), ${dy}px) scale(${dock.offsetWidth / b.width})`;
+  bar.classList.add('collapsed'); dock.classList.add('on');
+}
+function expandBar(){
+  bar.style.transform = ''; bar.classList.remove('collapsed'); dock.classList.remove('on');
+  scheduleCollapse(4500);
+}
+function scheduleCollapse(ms){
+  clearTimeout(barTimer);
+  barTimer = setTimeout(() => bar.matches(':hover') ? scheduleCollapse(1500) : collapseBar(), ms);
+}
+dock.onclick = expandBar;
+['pointerdown', 'input', 'change'].forEach(t => bar.addEventListener(t, () => scheduleCollapse(4500)));
+bar.addEventListener('pointerleave', () => { if (!bar.classList.contains('collapsed')) scheduleCollapse(2500); });
 let hintHidden = false;
 function hideHint(){ if (!hintHidden) { hintHidden = true; document.getElementById('hint').style.opacity = 0; } }
 
@@ -464,6 +496,7 @@ Promise.all(leaves.slice(0, 3).flatMap(L => L.tex.map(t => t.image.decode().catc
     l.style.opacity = 0; setTimeout(() => l.remove(), 1300);
     ready = true; renderer.domElement.classList.add('grab');
     document.getElementById('bar').classList.add('on'); document.getElementById('zoom').classList.add('on');
+    scheduleCollapse(3500);
     const h = document.getElementById('hint'); h.style.opacity = 1; setTimeout(hideHint, 5000);
   }, 250);
 });
