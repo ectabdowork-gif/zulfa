@@ -34,6 +34,11 @@
   input[type=range]{width:min(260px,32vw); accent-color:#fff; direction:rtl}
   .skip{position:fixed; bottom:24px; left:24px; z-index:6; border:0; cursor:pointer; font:inherit; font-size:13px; color:#fff;
         background:rgba(0,0,0,.28); backdrop-filter:blur(10px); padding:8px 16px; border-radius:999px; transition:opacity .6s}
+  .zoom{position:fixed; right:18px; top:50%; transform:translate(20px,-50%); display:flex; flex-direction:column; gap:8px; padding:8px;
+        border-radius:999px; background:var(--glass); backdrop-filter:blur(14px) saturate(1.2); -webkit-backdrop-filter:blur(14px);
+        box-shadow:0 8px 30px rgba(0,0,0,.18); opacity:0; pointer-events:none; transition:opacity .9s ease, transform .9s ease; z-index:5}
+  .zoom.on{opacity:1; transform:translate(0,-50%); pointer-events:auto}
+  .zoom .off{opacity:.35}
   .hint{position:fixed; top:18px; left:50%; transform:translateX(-50%); font-size:13px; color:#fff; background:rgba(0,0,0,.3);
         backdrop-filter:blur(10px); padding:6px 14px; border-radius:999px; opacity:0; transition:opacity 1s; pointer-events:none; z-index:5}
   @media (max-width:620px){ input[type=range]{display:none} .bar{gap:8px} .count{min-width:96px; font-size:13px} }
@@ -43,12 +48,18 @@
     .count{min-width:88px; font-size:12px}
     input[type=range]{width:min(200px,26vw)}
     .hint{top:8px; font-size:12px}
+    .zoom{right:8px; padding:4px; gap:4px}
   }
 </style>
 </head>
 <body>
 <div class="loader" id="loader"><div><span>زُلفى</span><i></i></div></div>
 <div class="hint" id="hint">اسحب طرف الصفحة أو اضغط عليها للتقليب</div>
+<div class="zoom" id="zoom">
+  <button class="btn" id="zin" title="تكبير" aria-label="تكبير"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button>
+  <button class="btn" id="zfit" title="ملء الإطار" aria-label="ملء الإطار"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 12h16M8 8l-4 4 4 4M16 8l4 4-4 4"/></svg></button>
+  <button class="btn" id="zout" title="تصغير" aria-label="تصغير"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14"/></svg></button>
+</div>
 <div class="bar" id="bar">
   <button class="btn" id="fs" title="ملء الشاشة" aria-label="ملء الشاشة"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
   <button class="btn" id="prev" title="السابق" aria-label="السابق"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg></button>
@@ -299,10 +310,29 @@ const camPos = new THREE.Vector3(), camLook = new THREE.Vector3();
 function readingView(){
   const a = innerWidth / innerHeight, tn = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
   // the book fills the screen height (the bar floats over it); on narrow screens its width decides
-  const H = Math.max(1.02 / (2 * tn), 2.04 / (2 * tn * a));
-  const tx = flipped === 0 ? -.5 : flipped === N ? .5 : 0;
+  // closed (front or back cover): pull back to show the whole desk; opening the book zooms in
+  if (flipped === 0 || flipped === N) {
+    const H = Math.max(TABLE_H / (2 * tn), TABLE_W / (2 * tn * a)) / zoom;
+    pan.set(0, 0);
+    return {pos: new THREE.Vector3(desk.position.x, H, 0), look: new THREE.Vector3(desk.position.x, 0, 0)};
+  }
+  // zoom = 1 is that fit; zooming in lets the viewer pan around within the book
+  const H = Math.max(1.02 / (2 * tn), 2.04 / (2 * tn * a)) / zoom;
+  const cx = flipped === 0 ? -.5 : flipped === N ? .5 : 0, halfW = flipped === 0 || flipped === N ? .5 : 1;
+  const px = Math.max(0, halfW - H * tn * a), pz = Math.max(0, .5 - H * tn);
+  pan.x = Math.max(-px, Math.min(px, pan.x)); pan.y = Math.max(-pz, Math.min(pz, pan.y));
   // straight down, no tilt: screen-up is the top edge of the pages (-z)
-  return {pos: new THREE.Vector3(tx, H, 0), look: new THREE.Vector3(tx, 0, 0)};
+  return {pos: new THREE.Vector3(cx + pan.x, H, pan.y), look: new THREE.Vector3(cx + pan.x, 0, pan.y)};
+}
+let zoom = 1;
+const pan = new THREE.Vector2();
+const ZMIN = .6, ZMAX = 3.5;
+function setZoom(z){
+  zoom = Math.max(ZMIN, Math.min(ZMAX, z));
+  if (zoom <= 1) pan.set(0, 0);
+  document.getElementById('zin').disabled = zoom >= ZMAX;
+  document.getElementById('zout').disabled = zoom <= ZMIN;
+  document.getElementById('zfit').classList.toggle('off', Math.abs(zoom - 1) < .01);
 }
 camera.up.set(0, 0, -1);
 let ready = false;
@@ -322,6 +352,11 @@ let drag = null;
 const cv = renderer.domElement;
 cv.addEventListener('pointerdown', e => {
   if (!ready) return;
+  if (zoom > 1.02) {                        // zoomed in: drag pans, a plain click still turns the page
+    const p = hit(e);
+    drag = {pan: true, x0: e.clientX, y0: e.clientY, px: pan.x, py: pan.y, moved: false, left: p ? p.x < 0 : true};
+    cv.setPointerCapture(e.pointerId); return;
+  }
   if (anim) return;
   const p = hit(e); if (!p || Math.abs(p.z) > .55 || Math.abs(p.x) > 1.05) return;
   const left = p.x < 0;
@@ -334,6 +369,12 @@ cv.addEventListener('pointerdown', e => {
 cv.addEventListener('pointermove', e => {
   if (!drag) return;
   if (!drag.moved && Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0) < 6) return;
+  if (drag.pan) {
+    drag.moved = true; cv.classList.add('grabbing');
+    const wpp = 2 * camera.position.y * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) / innerHeight;
+    pan.set(drag.px - (e.clientX - drag.x0) * wpp, drag.py - (e.clientY - drag.y0) * wpp);
+    return;
+  }
   const p = hit(e); if (!p) return;
   if (!drag.moved) { drag.moved = true; cv.classList.add('grabbing'); loadLeaf(drag.L.k + 1); loadLeaf(drag.L.k - 1); drag.L.front.castShadow = true; hideHint(); }
   const now = performance.now();
@@ -346,6 +387,7 @@ function endDrag(){
   if (!drag) return;
   const d = drag; drag = null; cv.classList.remove('grabbing');
   if (!d.moved) { turn(d.left ? 1 : -1); return; }
+  if (d.pan) return;
   const forward = d.v > 1.2 ? true : d.v < -1.2 ? false : d.L.theta > Math.PI / 2;
   if (d.left && forward) flipped++;
   if (!d.left && !forward) flipped--;
@@ -355,6 +397,20 @@ function endDrag(){
 cv.addEventListener('pointerup', endDrag);
 cv.addEventListener('pointercancel', endDrag);
 
+document.getElementById('zin').onclick = () => setZoom(zoom * 1.25);
+document.getElementById('zout').onclick = () => setZoom(zoom / 1.25);
+document.getElementById('zfit').onclick = () => setZoom(1);
+cv.addEventListener('wheel', e => { if (!ready) return; e.preventDefault(); setZoom(zoom * Math.exp(-e.deltaY * .0015)); }, {passive: false});
+// two-finger pinch on touch screens
+const touches = new Map(); let pinch0 = null;
+cv.addEventListener('pointerdown', e => { if (e.pointerType === 'touch') touches.set(e.pointerId, e); if (touches.size === 2) { const [a, b] = [...touches.values()]; pinch0 = {d: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY), z: zoom}; drag = null; } });
+cv.addEventListener('pointermove', e => {
+  if (!touches.has(e.pointerId)) return; touches.set(e.pointerId, e);
+  if (pinch0 && touches.size === 2) { const [a, b] = [...touches.values()]; setZoom(pinch0.z * Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY) / pinch0.d); }
+});
+const untouch = e => { touches.delete(e.pointerId); if (touches.size < 2) pinch0 = null; };
+cv.addEventListener('pointerup', untouch); cv.addEventListener('pointercancel', untouch);
+setZoom(1);
 document.getElementById('next').onclick = () => turn(1);
 document.getElementById('prev').onclick = () => turn(-1);
 const seek = document.getElementById('seek'); seek.max = N;
@@ -365,6 +421,9 @@ addEventListener('keydown', e => {
   if (e.key === 'ArrowRight' || e.key === 'PageUp') { e.preventDefault(); turn(-1); }
   if (e.key === 'Home') goTo(0);
   if (e.key === 'End') goTo(N);
+  if (e.key === '+' || e.key === '=') setZoom(zoom * 1.25);
+  if (e.key === '-') setZoom(zoom / 1.25);
+  if (e.key === '0') setZoom(1);
 });
 document.getElementById('fs').onclick = () => document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen?.();
 let hintHidden = false;
@@ -404,7 +463,7 @@ Promise.all(leaves.slice(0, 3).flatMap(L => L.tex.map(t => t.image.decode().catc
   setTimeout(() => {
     l.style.opacity = 0; setTimeout(() => l.remove(), 1300);
     ready = true; renderer.domElement.classList.add('grab');
-    document.getElementById('bar').classList.add('on');
+    document.getElementById('bar').classList.add('on'); document.getElementById('zoom').classList.add('on');
     const h = document.getElementById('hint'); h.style.opacity = 1; setTimeout(hideHint, 5000);
   }, 250);
 });
