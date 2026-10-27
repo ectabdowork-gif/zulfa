@@ -298,16 +298,13 @@ function goTo(target){
 const camPos = new THREE.Vector3(), camLook = new THREE.Vector3();
 function readingView(){
   const a = innerWidth / innerHeight, tn = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
-  // phones: frame the book tightly and give the (smaller) bar less room; desktops keep the lamp in view
-  const compact = Math.min(innerWidth, innerHeight) < 560;
-  const reserve = compact ? 52 : 96;
-  const usable = (innerHeight - reserve) / innerHeight;
-  const H = compact ? Math.max(2.06 / (2 * tn * a), 1.03 / (2 * tn * usable))
-                    : Math.max(2.75 / (2 * tn * a), 1.2 / (2 * tn * usable));
-  const tx = (flipped === 0 ? -.5 : flipped === N ? .5 : 0) - (compact ? 0 : .17);
-  const tz = (reserve * .46 / innerHeight) * 2 * H * tn;   // lift the book above the control bar
-  return {pos: new THREE.Vector3(tx, H, tz + H * .13), look: new THREE.Vector3(tx, 0, tz)};
+  // the book fills the screen height (the bar floats over it); on narrow screens its width decides
+  const H = Math.max(1.02 / (2 * tn), 2.04 / (2 * tn * a));
+  const tx = flipped === 0 ? -.5 : flipped === N ? .5 : 0;
+  // straight down, no tilt: screen-up is the top edge of the pages (-z)
+  return {pos: new THREE.Vector3(tx, H, 0), look: new THREE.Vector3(tx, 0, 0)};
 }
+camera.up.set(0, 0, -1);
 let ready = false;
 function updateCamera(now, dt){
   const v = readingView(), k = 1 - Math.exp(-dt * 2.4);
