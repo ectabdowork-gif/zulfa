@@ -247,20 +247,35 @@ function shapeLeaf(L, theta, dir = 1, lead = 1){
 }
 
 // pages/ = light 1400px images for every nearby leaf; pages-hd/ = 2800px for the open spread only
+const pageUrl = (n, hd) => `${hd ? 'pages-hd' : 'pages'}/p${String(n).padStart(3, '0')}.webp`;
+// A texture only goes on a page once its image is decoded; until then the page shows plain paper (never black).
 function pageTexture(n, mirror, hd = false){
   const img = new Image();
   const t = new THREE.Texture(img);
   t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = MAX_ANISO;
   if (mirror) { t.repeat.x = -1; t.offset.x = 1; }
-  img.onload = () => { t.needsUpdate = true; };
-  img.src = `${hd ? 'pages-hd' : 'pages'}/p${String(n).padStart(3, '0')}.webp`;
+  t.userData.ready = false;
+  img.src = pageUrl(n, hd);
+  img.decode().catch(() => {}).then(() => {
+    if (!img.naturalWidth) return;
+    t.needsUpdate = true; t.userData.ready = true; applyMap(n);
+  });
   return t;
 }
 function loadLeaf(k){
   const L = leaves[k]; if (!L || L.tex) return;
   L.tex = [pageTexture(2 * k + 1, false), pageTexture(2 * k + 2, true)];
-  L.fm.map = L.tex[0]; L.bm.map = L.tex[1];
   applyMap(2 * k + 1); applyMap(2 * k + 2);
+}
+// warm the browser cache with every light page (and the HD of the spreads next door) so turns never wait on the network
+let warmed = false;
+async function warmCache(){
+  if (warmed) return; warmed = true;
+  for (let n = 1; n <= PAGES; n++) { try { await fetch(pageUrl(n, false), {priority: 'low'}); } catch {} }
+}
+function warmHD(){
+  for (const f of [flipped + 1, flipped - 1]) if (f > 0 && f < N)
+    for (const n of [2 * f, 2 * f + 1]) fetch(pageUrl(n, true), {priority: 'low'}).catch(() => {});
 }
 function unloadFar(){
   for (const L of leaves) if (L.tex && Math.abs(L.k - flipped) > 5) {
@@ -271,8 +286,8 @@ const hdTex = new Map();     // page number -> high-res texture
 function applyMap(n){
   const L = leaves[(n - 1) >> 1]; if (!L) return;
   const back = n % 2 === 0, hd = hdTex.get(n);
-  const low = L.tex ? L.tex[back ? 1 : 0] : placeholder;
-  (back ? L.bm : L.fm).map = hd && hd.image.complete && hd.image.naturalWidth ? hd : low;
+  const low = L.tex && L.tex[back ? 1 : 0].userData.ready ? L.tex[back ? 1 : 0] : placeholder;
+  (back ? L.bm : L.fm).map = hd && hd.userData.ready ? hd : low;
 }
 function sharpen(){
   const want = new Set();
@@ -280,10 +295,9 @@ function sharpen(){
   if (flipped > 0) want.add(2 * flipped);       // right page
   for (const [n, t] of hdTex) if (!want.has(n)) { hdTex.delete(n); applyMap(n); t.dispose(); }
   for (const n of want) if (!hdTex.has(n)) {
-    const t = pageTexture(n, n % 2 === 0, true);
-    t.image.onload = () => { t.needsUpdate = true; if (hdTex.get(n) === t) applyMap(n); };
-    hdTex.set(n, t);
+    hdTex.set(n, pageTexture(n, n % 2 === 0, true));
   }
+  warmHD();
 }
 function prepare(){ for (let k = flipped - 3; k <= flipped + 3; k++) loadLeaf(k); unloadFar(); }
 
@@ -515,6 +529,7 @@ renderer.compile(scene, camera);
 sharpen();
 Promise.all(leaves.slice(0, 3).flatMap(L => L.tex.map(t => t.image.decode().catch(() => {})))).then(() => {
   requestAnimationFrame(frame);
+  setTimeout(warmCache, 1500);
   const l = document.getElementById('loader');
   setTimeout(() => {
     l.style.opacity = 0; setTimeout(() => l.remove(), 1300);
