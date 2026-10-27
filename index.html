@@ -79,15 +79,13 @@
   <button class="btn" id="next" title="التالي" aria-label="التالي"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M15 6l-6 6 6 6"/></svg></button>
 </div>
 
-<script src="pages-a.js" defer></script>
-<script src="pages-b.js" defer></script>
 <script src="table.js" defer></script>
 <script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js"}}</script>
 <script type="module">
 import * as THREE from 'three';
 
 /* ================= constants ================= */
-const PAGES = PAGE_DATA.length, N = PAGES / 2;   // leaf k: front = page 2k+1, back = page 2k+2
+const PAGES = 112, N = PAGES / 2;   // leaf k: front = page 2k+1, back = page 2k+2
 const T = 0.0011;            // paper thickness (1 unit = one page width)
 const SPINE_Y = 0.003;
 const GUT = 0.07;            // how far from the spine the pages rise out of the gutter
@@ -243,23 +241,43 @@ function shapeLeaf(L, theta, dir = 1, lead = 1){
   L.geo.computeBoundingSphere();
 }
 
-function pageTexture(n, mirror){
+// pages/ = light 1400px images for every nearby leaf; pages-hd/ = 2800px for the open spread only
+function pageTexture(n, mirror, hd = false){
   const img = new Image();
   const t = new THREE.Texture(img);
   t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = MAX_ANISO;
   if (mirror) { t.repeat.x = -1; t.offset.x = 1; }
   img.onload = () => { t.needsUpdate = true; };
-  img.src = PAGE_DATA[n - 1];
+  img.src = `${hd ? 'pages-hd' : 'pages'}/p${String(n).padStart(3, '0')}.webp`;
   return t;
 }
 function loadLeaf(k){
   const L = leaves[k]; if (!L || L.tex) return;
   L.tex = [pageTexture(2 * k + 1, false), pageTexture(2 * k + 2, true)];
   L.fm.map = L.tex[0]; L.bm.map = L.tex[1];
+  applyMap(2 * k + 1); applyMap(2 * k + 2);
 }
 function unloadFar(){
   for (const L of leaves) if (L.tex && Math.abs(L.k - flipped) > 5) {
     L.tex.forEach(t => t.dispose()); L.tex = null; L.fm.map = L.bm.map = placeholder;
+  }
+}
+const hdTex = new Map();     // page number -> high-res texture
+function applyMap(n){
+  const L = leaves[(n - 1) >> 1]; if (!L) return;
+  const back = n % 2 === 0, hd = hdTex.get(n);
+  const low = L.tex ? L.tex[back ? 1 : 0] : placeholder;
+  (back ? L.bm : L.fm).map = hd && hd.image.complete && hd.image.naturalWidth ? hd : low;
+}
+function sharpen(){
+  const want = new Set();
+  if (flipped < N) want.add(2 * flipped + 1);   // left page
+  if (flipped > 0) want.add(2 * flipped);       // right page
+  for (const [n, t] of hdTex) if (!want.has(n)) { hdTex.delete(n); applyMap(n); t.dispose(); }
+  for (const n of want) if (!hdTex.has(n)) {
+    const t = pageTexture(n, n % 2 === 0, true);
+    t.image.onload = () => { t.needsUpdate = true; if (hdTex.get(n) === t) applyMap(n); };
+    hdTex.set(n, t);
   }
 }
 function prepare(){ for (let k = flipped - 3; k <= flipped + 3; k++) loadLeaf(k); unloadFar(); }
@@ -292,7 +310,7 @@ function stepAnim(now){
   const a = anim, t = Math.min(1, (now - a.t0) / a.dur);
   shapeLeaf(a.L, a.from + (a.to - a.from) * ease(t), a.dir, a.lead);
   if (t >= 1) {
-    a.L.front.castShadow = false; anim = null; updateBlocks(); updateContact(); unloadFar();
+    a.L.front.castShadow = false; anim = null; updateBlocks(); updateContact(); unloadFar(); sharpen();
     if (queued) { const q = queued; queued = 0; turn(q); }
   }
 }
@@ -489,6 +507,7 @@ function frame(now){
 { const v = readingView(); camLook.copy(v.look);
   camera.position.set(v.pos.x + .4, v.pos.y * .55, v.look.z + v.pos.y * 1.05); camera.lookAt(camLook); }
 renderer.compile(scene, camera);
+sharpen();
 Promise.all(leaves.slice(0, 3).flatMap(L => L.tex.map(t => t.image.decode().catch(() => {})))).then(() => {
   requestAnimationFrame(frame);
   const l = document.getElementById('loader');
