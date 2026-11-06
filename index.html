@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>زلفى — تصفح الكتيب</title>
+<title>أضاحي — تصفح الكتاب</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500&display=swap" rel="stylesheet">
 <style>
@@ -63,7 +63,7 @@
 </style>
 </head>
 <body>
-<div class="loader" id="loader"><div><span>زُلفى</span><i></i></div></div>
+<div class="loader" id="loader"><div><span>أضاحي</span><i></i></div></div>
 <div class="hint" id="hint">اسحب طرف الصفحة أو اضغط عليها للتقليب</div>
 <div class="zoom" id="zoom">
   <button class="btn" id="zin" title="تكبير" aria-label="تكبير"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button>
@@ -85,7 +85,7 @@
 import * as THREE from 'three';
 
 /* ================= constants ================= */
-const PAGES = 112, N = PAGES / 2;   // leaf k: front = page 2k+1, back = page 2k+2
+const PAGES = 118, N = PAGES / 2;   // leaf k: front = page 2k+1, back = page 2k+2
 const T = 0.0011;            // paper thickness (1 unit = one page width)
 const SPINE_Y = 0.003;
 const GUT = 0.07;            // how far from the spine the pages rise out of the gutter
@@ -247,7 +247,9 @@ function shapeLeaf(L, theta, dir = 1, lead = 1){
 }
 
 // pages/ = light 1400px images for every nearby leaf; pages-hd/ = 2800px for the open spread only
-const pageUrl = (n, hd) => `${hd ? 'pages-hd' : 'pages'}/p${String(n).padStart(3, '0')}.webp`;
+// bump PAGE_VER whenever the page images are replaced, so no browser shows a cached page from an older edition
+const PAGE_VER = 2;
+const pageUrl = (n, hd) => `${hd ? 'pages-hd' : 'pages'}/p${String(n).padStart(3, '0')}.webp?v=${PAGE_VER}`;
 // A texture only goes on a page once its image is decoded; until then the page shows plain paper (never black).
 function pageTexture(n, mirror, hd = false){
   const img = new Image();
