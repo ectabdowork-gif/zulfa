@@ -248,7 +248,7 @@ function shapeLeaf(L, theta, dir = 1, lead = 1){
 
 // pages/ = light 1400px images for every nearby leaf; pages-hd/ = 2800px for the open spread only
 // bump PAGE_VER whenever the page images are replaced, so no browser shows a cached page from an older edition
-const PAGE_VER = 3;
+const PAGE_VER = 4;
 const pageUrl = (n, hd) => `${hd ? 'pages-hd' : 'pages'}/p${String(n).padStart(3, '0')}.webp?v=${PAGE_VER}`;
 // A texture only goes on a page once its image is decoded; until then the page shows plain paper (never black).
 function pageTexture(n, mirror, hd = false){
